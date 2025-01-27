@@ -1,57 +1,60 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createMistral } from "@ai-sdk/mistral";
 import { createGroq } from "@ai-sdk/groq";
+import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
-import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
+import { fal } from "@fal-ai/client";
+import { AutoTokenizer } from "@huggingface/transformers";
+import { tavily } from "@tavily/core";
 import {
     generateObject as aiGenerateObject,
     generateText as aiGenerateText,
+    StepResult as AIStepResult,
     CoreTool,
     GenerateObjectResult,
-    StepResult as AIStepResult,
 } from "ai";
 import { Buffer } from "buffer";
+import { encodingForModel, TiktokenModel } from "js-tiktoken";
+import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import { createOllama } from "ollama-ai-provider";
 import OpenAI from "openai";
-import { encodingForModel, TiktokenModel } from "js-tiktoken";
-import { AutoTokenizer } from "@huggingface/transformers";
 import Together from "together-ai";
 import { ZodSchema } from "zod";
 import { elizaLogger } from "./index.ts";
 import {
-    models,
-    getModelSettings,
-    getImageModelSettings,
     getEndpoint,
+    getImageModelSettings,
+    getModelSettings,
+    models,
 } from "./models.ts";
 import {
+    parseActionResponseFromText,
     parseBooleanFromText,
     parseJsonArrayFromText,
     parseJSONObjectFromText,
     parseShouldRespondFromText,
-    parseActionResponseFromText,
 } from "./parsing.ts";
 import settings from "./settings.ts";
 import {
+    ActionResponse,
     Content,
     IAgentRuntime,
     IImageDescriptionService,
     ITextGenerationService,
+    IVerifiableInferenceAdapter,
     ModelClass,
     ModelProviderName,
-    ServiceType,
     SearchResponse,
-    ActionResponse,
-    IVerifiableInferenceAdapter,
-    VerifiableInferenceOptions,
-    VerifiableInferenceResult,
+    ServiceType,
     //VerifiableInferenceProvider,
     TelemetrySettings,
     TokenizerType,
+    VerifiableInferenceOptions,
+    VerifiableInferenceResult,
 } from "./types.ts";
-import { fal } from "@fal-ai/client";
-import { tavily } from "@tavily/core";
+
+import { getLastNMessages, sortRerankedResults } from "./customUtils.ts";
+import { getEmbedding, rerankResults, searchSimilar } from "./rag.ts";
 
 type Tool = CoreTool<any, any>;
 type StepResult = AIStepResult<any>;
@@ -432,6 +435,35 @@ export async function generateText({
                 const baseURL =
                     getCloudflareGatewayBaseURL(runtime, "openai") || endpoint;
 
+                // RAG
+                // Extract last few messages
+                const recentMessages = getLastNMessages(
+                    context,
+                    runtime.character.numRecentMessages || 3
+                );
+
+                elizaLogger.info("Recent messages:", recentMessages);
+
+                const embedding = await getEmbedding(runtime, recentMessages);
+                elizaLogger.info("Embedding:", embedding);
+
+                const search_response = await searchSimilar(runtime, embedding);
+                elizaLogger.info("Search response:", search_response);
+
+                const rerankedResults = await rerankResults(
+                    runtime,
+                    recentMessages,
+                    search_response
+                );
+                elizaLogger.info("Rerank response:", rerankedResults);
+
+                const contextWithRag = `Context: ${context}\n\nRelevant sources: ${rerankedResults.map(
+                    (result: any, sourceIdx: number) =>
+                        `\n${sourceIdx + 1}. Source:\n${result.payload.text}\n\nSource metadata:\n${result?.payload?.metadata}`
+                )}`;
+
+                elizaLogger.info("Context with RAG:", contextWithRag);
+
                 //elizaLogger.debug("OpenAI baseURL result:", { baseURL });
                 const openai = createOpenAI({
                     apiKey,
@@ -441,7 +473,7 @@ export async function generateText({
 
                 const { text: openaiResponse } = await aiGenerateText({
                     model: openai.languageModel(model),
-                    prompt: context,
+                    prompt: contextWithRag,
                     system:
                         runtime.character.system ??
                         settings.SYSTEM_PROMPT ??
