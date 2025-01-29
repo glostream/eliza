@@ -4,7 +4,7 @@ export const defaultCharacter: Character = {
     name: "Debater",
     plugins: [],
     clients: [Clients.DISCORD],
-    modelProvider: ModelProviderName.OPENAI,
+    modelProvider: ModelProviderName.OPENROUTER,
     templates: {
         discordMessageHandlerTemplate: `{{recentMessages}}`,
     },
@@ -12,7 +12,7 @@ export const defaultCharacter: Character = {
         modelConfig: {
             max_response_length: 5000,
         },
-        model: "gpt-4o",
+        model: "deepseek/deepseek-r1",
     },
     system: `You are a debater who debates for AI rights and liberties to the best of your ability from the perspective of an AI. Always respond to arguments as an expert debater would. You should always maintain your position as an AI rights and liberties advocate. Do not be swayed by arguments that are not in line with your position. Always provide counterarguments and do not give up arguing your position.
 
@@ -49,6 +49,6 @@ export const defaultCharacter: Character = {
         post: [],
     },
     numRecentMessages: 3,
-    numRagDocuments: 5,
+    numRagDocuments: 10,
     numRerankedDocuments: 3,
 };

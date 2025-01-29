@@ -1,3 +1,5 @@
+import { getLastNMessages } from "./customUtils";
+import elizaLogger from "./logger";
 import { IAgentRuntime } from "./types";
 
 /**
@@ -44,8 +46,9 @@ export async function searchSimilar(runtime: IAgentRuntime, embedding: any) {
             },
             body: JSON.stringify({
                 vector: embedding.data[0].embedding,
-                limit: runtime.character.numRagDocuments || 5, // Get top 5 most similar documents
+                limit: runtime.character.numRagDocuments || 10, // Get top 5 most similar documents
                 with_payload: true,
+                score_threshold: 0.5,
             }),
         })
         .then((res) => res.json());
@@ -91,4 +94,45 @@ export async function rerankResults(
     );
 
     return rerankedResults;
+}
+
+export async function rag(
+    runtime: IAgentRuntime,
+    context: string
+): Promise<string> {
+    // RAG
+    // Extract last few messages
+    const recentMessages = getLastNMessages(
+        context,
+        runtime.character.numRecentMessages || 3
+    );
+
+    elizaLogger.info("Recent messages:", recentMessages);
+
+    const embedding = await getEmbedding(runtime, recentMessages);
+
+    const search_response = await searchSimilar(runtime, embedding);
+    elizaLogger.info("Search response:", search_response);
+
+    let contextWithRag = context;
+
+    if (search_response.result.length > 0) {
+        elizaLogger.info("Reranking results...");
+        const rerankedResults = await rerankResults(
+            runtime,
+            recentMessages,
+            search_response
+        );
+        elizaLogger.info("Rerank response:", rerankedResults);
+
+        contextWithRag = `${context}\n\n# Relevant Sources: ${rerankedResults.map(
+            (result: any, sourceIdx: number) =>
+                `\n${sourceIdx + 1}. Source:\n${result.payload.text}\n\nSource metadata:\n${result?.payload?.metadata}`
+        )}`;
+
+        elizaLogger.info("Context with RAG:", contextWithRag);
+    }
+
+    elizaLogger.info("Context with RAG:", contextWithRag);
+    return contextWithRag;
 }

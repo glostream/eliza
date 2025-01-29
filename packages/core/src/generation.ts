@@ -53,8 +53,7 @@ import {
     VerifiableInferenceResult,
 } from "./types.ts";
 
-import { getLastNMessages, sortRerankedResults } from "./customUtils.ts";
-import { getEmbedding, rerankResults, searchSimilar } from "./rag.ts";
+import { rag } from "./rag.ts";
 
 type Tool = CoreTool<any, any>;
 type StepResult = AIStepResult<any>;
@@ -435,36 +434,8 @@ export async function generateText({
                 const baseURL =
                     getCloudflareGatewayBaseURL(runtime, "openai") || endpoint;
 
-                // RAG
-                // Extract last few messages
-                const recentMessages = getLastNMessages(
-                    context,
-                    runtime.character.numRecentMessages || 3
-                );
+                const contextWithRag = await rag(runtime, context);
 
-                elizaLogger.info("Recent messages:", recentMessages);
-
-                const embedding = await getEmbedding(runtime, recentMessages);
-                elizaLogger.info("Embedding:", embedding);
-
-                const search_response = await searchSimilar(runtime, embedding);
-                elizaLogger.info("Search response:", search_response);
-
-                const rerankedResults = await rerankResults(
-                    runtime,
-                    recentMessages,
-                    search_response
-                );
-                elizaLogger.info("Rerank response:", rerankedResults);
-
-                const contextWithRag = `Context: ${context}\n\nRelevant sources: ${rerankedResults.map(
-                    (result: any, sourceIdx: number) =>
-                        `\n${sourceIdx + 1}. Source:\n${result.payload.text}\n\nSource metadata:\n${result?.payload?.metadata}`
-                )}`;
-
-                elizaLogger.info("Context with RAG:", contextWithRag);
-
-                //elizaLogger.debug("OpenAI baseURL result:", { baseURL });
                 const openai = createOpenAI({
                     apiKey,
                     baseURL,
@@ -798,7 +769,11 @@ export async function generateText({
 
             case ModelProviderName.OPENROUTER: {
                 elizaLogger.debug("Initializing OpenRouter model.");
+
+                const contextWithRag = await rag(runtime, context);
+
                 const serverUrl = getEndpoint(provider);
+
                 const openrouter = createOpenAI({
                     apiKey,
                     baseURL: serverUrl,
@@ -807,7 +782,7 @@ export async function generateText({
 
                 const { text: openrouterResponse } = await aiGenerateText({
                     model: openrouter.languageModel(model),
-                    prompt: context,
+                    prompt: contextWithRag,
                     temperature: temperature,
                     system:
                         runtime.character.system ??
@@ -822,7 +797,16 @@ export async function generateText({
                     experimental_telemetry: experimental_telemetry,
                 });
 
-                response = openrouterResponse;
+                elizaLogger.info("OpenRouter response:", openrouterResponse);
+
+                const singleLineText = openrouterResponse
+                    .replace(/\n/g, "\\n")
+                    .replace(/"/g, '\\"');
+
+                response = `\`\`\`json
+                { "user": "Debater", "text": "${singleLineText}", "action": "NONE" }
+                \`\`\``;
+
                 elizaLogger.debug("Received response from OpenRouter model.");
                 break;
             }
@@ -1038,6 +1022,7 @@ export async function generateText({
 
             case ModelProviderName.DEEPSEEK: {
                 elizaLogger.debug("Initializing Deepseek model.");
+
                 const serverUrl = models[provider].endpoint;
                 const deepseek = createOpenAI({
                     apiKey,
